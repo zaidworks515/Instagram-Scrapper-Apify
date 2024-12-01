@@ -34,20 +34,19 @@ def insert_data(session_id, file_path, creation_status):
     
 # insert_data('123', '/path/to/file.txt', 0)
 
-
-def update_status(session_id, new_status):
+def update_status(session_id, new_status, cloudinary_url):
     conn, cursor = create_connection()
     if not conn or not cursor:
         return
 
     update_query = """
     UPDATE scrapped_data_path
-    SET creation_status = ?
+    SET creation_status = ?, cloudinary_url = ?
     WHERE session_id = ?;
     """
 
     try:
-        cursor.execute(update_query, (new_status, session_id))
+        cursor.execute(update_query, (new_status, cloudinary_url, session_id))
         conn.commit()
 
         if cursor.rowcount > 0:
@@ -59,7 +58,8 @@ def update_status(session_id, new_status):
     finally:
         conn.close()
 
-# update_status('123', 1)
+
+# update_status('123', 1, 'abcd.com')
 
 
 def check_status(session_id):
@@ -67,7 +67,7 @@ def check_status(session_id):
         conn, cursor = create_connection()
 
         query = """
-            SELECT creation_status 
+            SELECT creation_status, cloudinary_url 
             FROM scrapped_data_path 
             WHERE session_id = ? 
             ORDER BY created_at DESC 
@@ -79,7 +79,7 @@ def check_status(session_id):
         result = cursor.fetchone()
 
         if result is not None:
-            return {"session_id": session_id, "creation_status": result[0]}
+            return {"session_id": session_id, "creation_status": result[0], "cloudinary_url": result[1]}
         else:
             return {"error": "Session ID not found"}
 
@@ -108,6 +108,7 @@ def check_status(session_id):
 #         id INTEGER PRIMARY KEY AUTOINCREMENT,
 #         session_id TEXT NOT NULL,
 #         file_path TEXT NOT NULL,
+#         cloudinary_url TEXT NULL,
 #         creation_status BINARY NOT NULL, 
 #         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 #     );"""

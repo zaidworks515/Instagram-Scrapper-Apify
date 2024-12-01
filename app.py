@@ -3,7 +3,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from apify_client import ApifyClient
-from config import port, token
+from config import port, token, cloudinary_secret_key, cloudinary_api_key, cloudinary_name
 from concurrent.futures import ThreadPoolExecutor
 import pandas as pd
 from db_queries import insert_data, update_status, check_status
@@ -11,6 +11,9 @@ import uuid
 import asyncio
 import logging
 import time
+import cloudinary
+import cloudinary.uploader
+
 
 app = FastAPI()
 
@@ -24,7 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-executor = ThreadPoolExecutor(max_workers=10)
+executor = ThreadPoolExecutor(max_workers=20)
 
 
 def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2=None, hashtag3=None, min_followers=None):
@@ -51,14 +54,38 @@ def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2
     columns_list = list(items[0].keys())
     dataframe = pd.DataFrame(items)
     dataframe = dataframe.reindex(columns=columns_list, fill_value=None)
-    dataframe.to_csv('demo1.csv', index=False)
+
+    """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
+    cloudinary.config( 
+        cloud_name = cloudinary_name, 
+        api_key = cloudinary_api_key, 
+        api_secret = cloudinary_secret_key, 
+        secure=True
+    )
+    cloudinary_url = None
 
     user_names = preprocessing_dataframe1(dataframe, session_id)
     if user_names:
         profiles_data = fetch_profiles(session_id, token, user_names, min_followers) #scrapper 2 (only for profiles)
         print('profiles data extracted successfully.....')
-        update_status(session_id=session_id, new_status=1)
+        
+        upload_result = cloudinary.uploader.upload(f"scrapped data/{session_id}.csv",
+                                           public_id=session_id, resource_type="raw")
+        
+        if upload_result:
+            cloudinary_url = upload_result['url']
+
+        update_status(session_id=session_id, new_status=1, cloudinary_url=cloudinary_url)
         print('status updated to 1', session_id)
+
+
+        file_path = f'scrapped data/{session_id}.csv'
+
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            print(f"File {file_path} has been removed successfully.")
+        else:
+            print(f"File {file_path} not found.")
 
         return profiles_data
     else:
@@ -128,6 +155,7 @@ async def scrape_data(hashtag1: str, hashtag2: str = None, hashtag3: str = None,
         session_id = str(uuid.uuid4())
         file_path = f'scrapped data/{session_id}.csv'
         response_message = 'Data is being scrapped, and path will be saved in DB.'
+        
         insert_data(session_id=session_id, file_path=file_path, creation_status=0)
 
         executor.submit(data_scrapping, session_id, token, result_limit, hashtag1, hashtag2, hashtag3, min_followers)
@@ -143,35 +171,31 @@ async def scrape_data(hashtag1: str, hashtag2: str = None, hashtag3: str = None,
 async def get_data(session_id: str):
     try:
         start_time = time.time()
-        timeout = 60  
+        timeout = 10  
 
         while True:
             if time.time() - start_time > timeout:
                 raise HTTPException(status_code=408, detail="Timeout waiting for data to be ready")
 
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
             
             status = check_status(session_id)
 
             if status['creation_status'] == 1:
                 try:
-                    dataframe = pd.read_csv(f'scrapped data/{session_id}.csv')
-                    print("DATAFRAME IS FOUND")
-                    print("==" * 20)
+                    cloudinary_url = status['cloudinary_url']
 
-
-                    return JSONResponse(content={'scrapped_data': dataframe.to_json()}, status_code=200)
+                    return JSONResponse(content={'cloudinary_url': cloudinary_url}, status_code=200)
                 except FileNotFoundError:
                     logging.error(f"File for session {session_id} not found.")
-                    return JSONResponse(content={'scrapped_data': 'not found'}, status_code=404)
+                    return JSONResponse(content={'cloudinary_url': 'not found'}, status_code=404)
                 except Exception as e:
                     logging.error(f"Error reading file for session {session_id}: {str(e)}")
-                    return JSONResponse(content={'scrapped_data': 'error reading file'}, status_code=500)
+                    return JSONResponse(content={'cloudinary_url': 'error reading file'}, status_code=500)
 
     except Exception as e:
         logging.error(f"Unexpected error occurred: {str(e)}")
         raise HTTPException(status_code=500, detail="An internal error occurred")
-
 
 
 @app.on_event("shutdown")

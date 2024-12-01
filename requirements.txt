@@ -6,3 +6,4 @@ uvicorn
 pandas
 numpy
 mysql-connector-python
+cloudinary
