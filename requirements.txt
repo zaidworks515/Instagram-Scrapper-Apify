@@ -1,8 +1,8 @@
 apify-client
 apify
-fastapi
+flask
+flask-cors
 python-dotenv
-uvicorn
 pandas
 numpy
 mysql-connector-python
