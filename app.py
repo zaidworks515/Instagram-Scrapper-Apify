@@ -1,19 +1,16 @@
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from apify_client import ApifyClient
 from config import port, token
 from concurrent.futures import ThreadPoolExecutor
-import logging
 import pandas as pd
-
-
-class DataRequest(BaseModel):
-    hashtag1: str  
-    hashtag2: str  
-    hashtag3: str  
-    
+from db_queries import insert_data, update_status, check_status
+import uuid
+import asyncio
+import logging
+import time
 
 app = FastAPI()
 
@@ -27,72 +24,160 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+executor = ThreadPoolExecutor(max_workers=10)
 
-executor = ThreadPoolExecutor(max_workers=10)  
 
-
-def data_scrapping(token, hashtag1=None, hashtag2=None, hashtag3=None):
+def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2=None, hashtag3=None, min_followers=None):
     client = ApifyClient(token)
     run_input = None
     if hashtag1:
         run_input = {
-        "hashtags": [hashtag1],
-        "resultsLimit": 5,
+            "hashtags": [hashtag1],
+            "resultsLimit": result_limit,
         }
     elif hashtag1 and hashtag2:
         run_input = {
-        "hashtags": [hashtag1,hashtag2],
-        "resultsLimit": 10,
+            "hashtags": [hashtag1, hashtag2],
+            "resultsLimit": result_limit,
         }
     elif hashtag1 and hashtag2 and hashtag3:
         run_input = {
-        "hashtags": [hashtag1,hashtag2,hashtag3],
-        "resultsLimit": 10,
+            "hashtags": [hashtag1, hashtag2, hashtag3],
+            "resultsLimit": result_limit,
         }
-    
     
     run = client.actor("reGe1ST3OBgYZSsZJ").call(run_input=run_input)
     items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
     columns_list = list(items[0].keys())
-
     dataframe = pd.DataFrame(items)
     dataframe = dataframe.reindex(columns=columns_list, fill_value=None)
+    dataframe.to_csv('demo1.csv', index=False)
+
+    user_names = preprocessing_dataframe1(dataframe, session_id)
+    if user_names:
+        profiles_data = fetch_profiles(session_id, token, user_names, min_followers) #scrapper 2 (only for profiles)
+        print('profiles data extracted successfully.....')
+        update_status(session_id=session_id, new_status=1)
+        print('status updated to 1', session_id)
+
+        return profiles_data
+    else:
+        print('Sorry, No profile data is made..')
+        return None
 
 
-    return dataframe
-
-def preprocessing_dataframe(dataframe):
+def preprocessing_dataframe1(dataframe, session_id):
     try:
-        existed_dataframe = pd.read_csv('scrapped data/data.csv')
-        merged_data = pd.concat([existed_dataframe, dataframe], ignore_index=True)
-        merged_data.drop_duplicates(inplace=True)
-        merged_data.to_csv('scrapped data/data.csv', index=False)
-    except:
-        new_dataframe = dataframe
-        new_dataframe.to_csv('scrapped data/data.csv', index=False)
-    
-    
-@app.post("/scrape_data")
-async def scrape_data(request: DataRequest):
-    try:
-        hashtag1 = request.hashtag1
-        hashtag2 = request.hashtag2
-        hashtag3 = request.hashtag3
-        
-        response_message = 'data is being scrapped and will be saved in db'
-    
-        scrapped_dataframe = executor.submit(data_scrapping, token, hashtag1, hashtag2, hashtag3)  
-        
-        # yhaa'n db mein image_path save krwana hai. if 'executor'
-        preprocessing_dataframe(scrapped_dataframe) # currently saving as csv
+        file_path = f'scrapped data/{session_id}.csv'
 
-        return JSONResponse(content={'status': True, 'message': response_message}, status_code=200)
-        
+        if 'ownerUsername' not in dataframe.columns:
+            raise ValueError("The input DataFrame does not contain the required 'ownerUsername' column.")
+
+        if os.path.exists(file_path):
+            existed_dataframe = pd.read_csv(file_path)
+            merged_data = pd.concat([existed_dataframe, dataframe], ignore_index=True)
+        else:
+            merged_data = dataframe
+
+        merged_data = merged_data.drop_duplicates(subset='ownerUsername', keep='first')
+        user_names = merged_data['ownerUsername'].to_list()
+
+        if not user_names:
+            logging.warning("No unique usernames found after preprocessing.")
+            return []
+
+        return user_names
+
+    except Exception as e:
+        logging.error(f"Error in preprocessing_dataframe1: {str(e)}")
+        raise
+
+
+
+def fetch_profiles(session_id, token, user_names, min_followers):
+    print('executing fetch_profiles')
+    try:
+        client = ApifyClient(token)
+        run_input = { "usernames": user_names}
+        run = client.actor("dSCLg0C3YEZ83HzYX").call(run_input=run_input)
+
+        items = list(client.dataset(run["defaultDatasetId"]).iterate_items())
+        if items:
+            columns_list = list(items[0].keys())
+
+            dataframe = pd.DataFrame(items)
+            dataframe = dataframe.reindex(columns=columns_list, fill_value=None) 
+            dataframe = dataframe[['username', 'fullName', 'biography', 'externalUrl', 'followersCount', 'followsCount', 'hasChannel',
+                                'highlightReelCount', 'isBusinessAccount', 'joinedRecently', 'businessCategoryName', 
+                                'private', 'verified', 'postsCount']]
+
+            dataframe = dataframe.drop_duplicates(keep='first')
+            dataframe = dataframe[dataframe['followersCount'] >= min_followers]
+
+            dataframe.to_csv(f'scrapped data/{session_id}.csv', index=False)
+        return dataframe
     
     except Exception as e:
-        logging.error(f"Error in face_swap: {str(e)}")
+        return e
+
+
+@app.post("/scrape_data")
+async def scrape_data(hashtag1: str, hashtag2: str = None, hashtag3: str = None, result_limit: int = 10, min_followers: int = None):
+
+    try:
+        session_id = str(uuid.uuid4())
+        file_path = f'scrapped data/{session_id}.csv'
+        response_message = 'Data is being scrapped, and path will be saved in DB.'
+        insert_data(session_id=session_id, file_path=file_path, creation_status=0)
+
+        executor.submit(data_scrapping, session_id, token, result_limit, hashtag1, hashtag2, hashtag3, min_followers)
+
+        return JSONResponse(content={'message': response_message, 'session_id': session_id}, status_code=200)
+
+    except Exception as e:
+        logging.error(f"Error in scrapping data: {str(e)}")
         raise HTTPException(status_code=500, detail="An internal error occurred")
-    
+
+
+@app.post("/get_data")
+async def get_data(session_id: str):
+    try:
+        start_time = time.time()
+        timeout = 60  
+
+        while True:
+            if time.time() - start_time > timeout:
+                raise HTTPException(status_code=408, detail="Timeout waiting for data to be ready")
+
+            await asyncio.sleep(3)
+            
+            status = check_status(session_id)
+
+            if status['creation_status'] == 1:
+                try:
+                    dataframe = pd.read_csv(f'scrapped data/{session_id}.csv')
+                    print("DATAFRAME IS FOUND")
+                    print("==" * 20)
+
+
+                    return JSONResponse(content={'scrapped_data': dataframe.to_json()}, status_code=200)
+                except FileNotFoundError:
+                    logging.error(f"File for session {session_id} not found.")
+                    return JSONResponse(content={'scrapped_data': 'not found'}, status_code=404)
+                except Exception as e:
+                    logging.error(f"Error reading file for session {session_id}: {str(e)}")
+                    return JSONResponse(content={'scrapped_data': 'error reading file'}, status_code=500)
+
+    except Exception as e:
+        logging.error(f"Unexpected error occurred: {str(e)}")
+        raise HTTPException(status_code=500, detail="An internal error occurred")
+
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    executor.shutdown(wait=True)
+
 
 if __name__ == "__main__":
     import uvicorn
