@@ -27,6 +27,18 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.on_event("startup")
+async def startup():
+    cloudinary.config( 
+        cloud_name = cloudinary_name, 
+        api_key = cloudinary_api_key, 
+        api_secret = cloudinary_secret_key, 
+        secure=True
+    )
+    logging.info("Cloudinary configured successfully.")
+
+
 # executor = ThreadPoolExecutor(max_workers=20)
 
 
@@ -56,12 +68,12 @@ def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2
     dataframe = dataframe.reindex(columns=columns_list, fill_value=None)
 
     """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
-    cloudinary.config( 
-        cloud_name = cloudinary_name, 
-        api_key = cloudinary_api_key, 
-        api_secret = cloudinary_secret_key, 
-        secure=True
-    )
+    # cloudinary.config( 
+    #     cloud_name = cloudinary_name, 
+    #     api_key = cloudinary_api_key, 
+    #     api_secret = cloudinary_secret_key, 
+    #     secure=True
+    # )
     cloudinary_url = None
 
     user_names = preprocessing_dataframe1(dataframe, session_id)
