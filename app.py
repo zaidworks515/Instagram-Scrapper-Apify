@@ -31,13 +31,6 @@ app.add_middleware(
 
 def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2=None, hashtag3=None, min_followers=None):
 
-    """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
-    cloudinary.config( 
-        cloud_name = cloudinary_name, 
-        api_key = cloudinary_api_key, 
-        api_secret = cloudinary_secret_key, 
-        secure=True
-    )
     cloudinary_url = None
 
     client = ApifyClient(token)
@@ -70,9 +63,15 @@ def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2
         profiles_data = fetch_profiles(session_id, token, user_names, min_followers) #scrapper 2 (only for profiles)
         print('profiles data extracted successfully.....')
 
-        max_tries = 3
+        max_tries = 5
         while max_tries > 0:
             try:
+                """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
+                cloudinary.config( 
+                cloud_name = cloudinary_name, 
+                api_key = cloudinary_api_key, 
+                api_secret = cloudinary_secret_key, secure=True)
+
                 upload_result = cloudinary.uploader.upload(f"scrapped data/{session_id}.csv",
                                                 public_id=session_id, resource_type="raw",
                                                 timeout=120000)
