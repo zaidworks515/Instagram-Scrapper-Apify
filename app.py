@@ -28,21 +28,18 @@ app.add_middleware(
 )
 
 
-@app.on_event("startup")
-async def startup():
+
+def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2=None, hashtag3=None, min_followers=None):
+
+    """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
     cloudinary.config( 
         cloud_name = cloudinary_name, 
         api_key = cloudinary_api_key, 
         api_secret = cloudinary_secret_key, 
         secure=True
     )
-    logging.info("Cloudinary configured successfully.")
+    cloudinary_url = None
 
-
-# executor = ThreadPoolExecutor(max_workers=20)
-
-
-def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2=None, hashtag3=None, min_followers=None):
     client = ApifyClient(token)
     run_input = None
     if hashtag1:
@@ -67,23 +64,24 @@ def data_scrapping(session_id, token, result_limit=None, hashtag1=None, hashtag2
     dataframe = pd.DataFrame(items)
     dataframe = dataframe.reindex(columns=columns_list, fill_value=None)
 
-    """TO UPLOAD THE DATAFRAME INTO CLOUDINARY"""
-    # cloudinary.config( 
-    #     cloud_name = cloudinary_name, 
-    #     api_key = cloudinary_api_key, 
-    #     api_secret = cloudinary_secret_key, 
-    #     secure=True
-    # )
-    cloudinary_url = None
 
     user_names = preprocessing_dataframe1(dataframe, session_id)
     if user_names:
         profiles_data = fetch_profiles(session_id, token, user_names, min_followers) #scrapper 2 (only for profiles)
         print('profiles data extracted successfully.....')
-        
-        upload_result = cloudinary.uploader.upload(f"scrapped data/{session_id}.csv",
-                                           public_id=session_id, resource_type="raw",
-                                           timeout=120000)
+
+        max_tries = 3
+        while max_tries > 0:
+            try:
+                upload_result = cloudinary.uploader.upload(f"scrapped data/{session_id}.csv",
+                                                public_id=session_id, resource_type="raw",
+                                                timeout=120000)
+                if upload_result:
+                    max_tries = 0
+            except Exception as e:
+                print(f"try no {max_tries} failed.. retrying")
+            max_tries -= 1
+            time.sleep(1)
         
         if upload_result:
             cloudinary_url = upload_result['url']
