@@ -1,7 +1,6 @@
 apify-client
 apify
-flask
-flask-cors
+fastapi
 python-dotenv
 pandas
 numpy
